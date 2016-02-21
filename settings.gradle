@@ -1,1 +1,1 @@
-include ':sample', ':android-pathview'
+include ':sample', ':android-pathview', ':pathview-divide-sample'
