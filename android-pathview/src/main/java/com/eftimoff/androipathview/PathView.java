@@ -7,6 +7,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.os.Handler;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
@@ -66,7 +67,7 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
     /**
      * The progress of the drawing.
      */
-    private float progress = 0f;
+    private float progress = 1f;
 
     /**
      * If the used colors are from the svg or from the set color.
@@ -102,6 +103,26 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
      */
     private Canvas mTempCanvas;
 
+    private boolean backgroundInit = false;
+
+    private Paint backgroundPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    private Bitmap mBackgroundBitmap;
+
+    private Canvas mBackgroundCanvas;
+
+    private Bitmap mAnimateBitmap;
+
+    private Canvas mAnimateCanvas;
+
+    private int mStateCounter = 0;
+
+    private int mStateDivider = 1;
+
+    private List<Path> originPaths = new ArrayList<>();
+
+    private Paint tempPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
 
     /**
      * Default constructor.
@@ -133,6 +154,9 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
         super(context, attrs, defStyle);
         paint.setStyle(Paint.Style.STROKE);
         getFromAttributes(context, attrs);
+        tempPaint.setStyle(Paint.Style.STROKE);
+        tempPaint.setColor(Color.RED);
+        tempPaint.setStrokeWidth(8);
     }
 
     /**
@@ -145,7 +169,7 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
         final TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.PathView);
         try {
             if (a != null) {
-                paint.setColor(a.getColor(R.styleable.PathView_pathColor, 0xff00ff00));
+                paint.setColor(a.getColor(R.styleable.PathView_pathColor, 0xffff0000));
                 paint.setStrokeWidth(a.getDimensionPixelSize(R.styleable.PathView_pathWidth, 8));
                 svgResourceId = a.getResourceId(R.styleable.PathView_svg, 0);
                 naturalColors = a.getBoolean(R.styleable.PathView_naturalColors, false);
@@ -216,38 +240,121 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
             // Required only for Android 4.4 and earlier
             svgPath.path.rLineTo(0.0f, 0.0f);
         }
+        if (mBackgroundBitmap == null && mBackgroundCanvas == null) {
+            Log.d(LOG_TAG, "background not init");
+            Handler handler = new Handler(getContext().getMainLooper());
+            handler.post(new Runnable() {
+                @Override
+                public void run() {
+                    invalidate();
+                    backgroundInit = true;
+                }
+            });
+        }
+    }
+
+    public void setStateCounter(int counter) {
+        mStateCounter = counter;
+        Log.d(LOG_TAG, "counter: " + mStateCounter);
+    }
+
+    public int getStateCounter() {
+        return mStateCounter;
+    }
+
+    public void setStateDivider(int divider) {
+        if (divider > 0) {
+            mStateDivider = divider;
+        }
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
+        Log.d(LOG_TAG, "onDraw: " + progress);
+        if (backgroundInit && mBackgroundBitmap == null && mBackgroundCanvas == null) {
+            Log.d(LOG_TAG, "draw background");
+            mBackgroundBitmap = Bitmap.createBitmap(canvas.getWidth(), canvas.getHeight(), Bitmap.Config.ARGB_8888);
+            mBackgroundCanvas = new Canvas(mBackgroundBitmap);
+            backgroundPaint.setStyle(Paint.Style.STROKE);
+            backgroundPaint.setStrokeWidth(8);
+            backgroundPaint.setStrokeCap(Paint.Cap.ROUND);
+            backgroundPaint.setColor(Color.GRAY);
 
-        if(mTempBitmap==null || (mTempBitmap!=null && (mTempBitmap.getWidth()!=canvas.getWidth()||mTempBitmap.getHeight()!=canvas.getHeight()) ))
+            synchronized (mSvgLock) {
+                mBackgroundCanvas.save();
+                mBackgroundCanvas.translate(getPaddingLeft(), getPaddingTop());
+                fill(mBackgroundCanvas);
+                int count = paths.size();
+                for (int i = 0; i < count; i++) {
+                    SvgUtils.SvgPath svgPath = paths.get(i);
+                    Path path = new Path(svgPath.path);
+                    originPaths.add(path);
+                    mBackgroundCanvas.drawPath(path, backgroundPaint);
+                }
+                fillAfter(mBackgroundCanvas);
+                mBackgroundCanvas.restore();
+                applySolidColor(mBackgroundBitmap);
+                canvas.drawBitmap(mBackgroundBitmap, 0, 0, null);
+                progress = 0f;
+                return;
+            }
+        }
+
+        if(mAnimateBitmap == null || (mAnimateBitmap.getWidth() != canvas.getWidth() || mAnimateBitmap.getHeight() != canvas.getHeight()))
         {
+            mAnimateBitmap = Bitmap.createBitmap(canvas.getWidth(), canvas.getHeight(), Bitmap.Config.ARGB_8888);
+            mAnimateCanvas = new Canvas(mAnimateBitmap);
+
             mTempBitmap = Bitmap.createBitmap(canvas.getWidth(), canvas.getHeight(), Bitmap.Config.ARGB_8888);
             mTempCanvas = new Canvas(mTempBitmap);
         }
-
-        mTempBitmap.eraseColor(0);
-        synchronized (mSvgLock) {
-            mTempCanvas.save();
-            mTempCanvas.translate(getPaddingLeft(), getPaddingTop());
-            fill(mTempCanvas);
-            final int count = paths.size();
-            for (int i = 0; i < count; i++) {
-                final SvgUtils.SvgPath svgPath = paths.get(i);
-                final Path path = svgPath.path;
-                final Paint paint1 = naturalColors ? svgPath.paint : paint;
-                mTempCanvas.drawPath(path, paint1);
+        if (mStateCounter > 1 && progress > 0.00f && progress < 0.01f) {
+            int subState = (mStateCounter - 1) * mStateDivider;
+            for (int j = 0; j < subState; j++) {
+                Path path = originPaths.get(j);
+                mTempCanvas.drawPath(path, tempPaint);
             }
+        }
 
-            fillAfter(mTempCanvas);
+        mAnimateBitmap.eraseColor(0);
+        synchronized (mSvgLock) {
+            mAnimateCanvas.save();
+            mAnimateCanvas.translate(getPaddingLeft(), getPaddingTop());
+            fill(mAnimateCanvas);
+            int count = paths.size();
+            if (paths.size() > 0 && mStateCounter > 0) {
+                int start = (mStateCounter - 1) * mStateDivider;
+                int end = mStateCounter * mStateDivider;
+                if (end > count) {
+                    end = count;
+                }
+                for (int i = start; i < end; i++) {
+                    SvgUtils.SvgPath svgPath = paths.get(i);
+                    Path path = svgPath.path;
+                    Paint paint1 = naturalColors ? svgPath.paint : paint;
+                    mAnimateCanvas.drawPath(path, paint1);
+                }
 
-            mTempCanvas.restore();
+            }
+            /*
+            for (int i = 0; i < count; i++) {
+                SvgUtils.SvgPath svgPath = paths.get(i);
+                Path path = svgPath.path;
+                Paint paint1 = naturalColors ? svgPath.paint : paint;
+                mAnimateCanvas.drawPath(path, paint1);
+            }
+            */
 
-            applySolidColor(mTempBitmap);
 
-            canvas.drawBitmap(mTempBitmap,0,0,null);
+            fillAfter(mAnimateCanvas);
+            mAnimateCanvas.restore();
+            applySolidColor(mAnimateBitmap);
+
+            if (mBackgroundBitmap != null)
+                canvas.drawBitmap(mBackgroundBitmap, 0, 0, null);
+            canvas.drawBitmap(mTempBitmap, 0, 0, null);
+            canvas.drawBitmap(mAnimateBitmap, 0, 0, null);
         }
     }
     /**
