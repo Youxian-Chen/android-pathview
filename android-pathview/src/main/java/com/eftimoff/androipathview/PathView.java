@@ -87,7 +87,7 @@ public class PathView extends View {
                 naturalColors = a.getBoolean(R.styleable.PathView_naturalColors, false);
                 fill = a.getBoolean(R.styleable.PathView_fill,false);
                 fillColor = a.getColor(R.styleable.PathView_fillColor,Color.argb(0,0,0,0));
-                divider = a.getInteger(R.styleable.PathView_divider, 1);
+                divider = a.getInteger(R.styleable.PathView_pathDivider, 1);
             }
         } finally {
             if (a != null) {
