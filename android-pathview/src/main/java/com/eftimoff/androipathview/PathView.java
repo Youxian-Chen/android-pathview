@@ -7,6 +7,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.PorterDuff;
 import android.os.Handler;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -25,146 +26,57 @@ import java.util.List;
  * PathView is a View that animates paths.
  */
 @SuppressWarnings("unused")
-public class PathView extends View implements SvgUtils.AnimationStepListener {
-    /**
-     * Logging tag.
-     */
+public class PathView extends View {
     public static final String LOG_TAG = "PathView";
-    /**
-     * The paint for the path.
-     */
     private Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    /**
-     * Utils to catch the paths from the svg.
-     */
     private final SvgUtils svgUtils = new SvgUtils(paint);
-    /**
-     * All the paths provided to the view. Both from Path and Svg.
-     */
     private List<SvgUtils.SvgPath> paths = new ArrayList<>();
-    /**
-     * This is a lock before the view is redrawn
-     * or resided it must be synchronized with this object.
-     */
     private final Object mSvgLock = new Object();
-    /**
-     * Thread for working with the object above.
-     */
     private Thread mLoader;
-
-    /**
-     * The svg image from the raw directory.
-     */
     private int svgResourceId;
-    /**
-     * Object that builds the animation for the path.
-     */
-    private AnimatorBuilder animatorBuilder;
-    /**
-     * Object that builds the animation set for the path.
-     */
-    private AnimatorSetBuilder animatorSetBuilder;
-    /**
-     * The progress of the drawing.
-     */
     private float progress = 1f;
-
-    /**
-     * If the used colors are from the svg or from the set color.
-     */
     private boolean naturalColors;
-    /**
-     * If the view is filled with its natural colors after path drawing.
-     */
     private boolean fillAfter;
-    /**
-     * The view will be filled and showed as default without any animation.
-     */
     private boolean fill;
-    /**
-     * The solid color used for filling svg when fill is true
-     */
+    private int divider;
+
     private int fillColor;
-    /**
-     * The width of the view.
-     */
     private int width;
-    /**
-     * The height of the view.
-     */
     private int height;
-    /**
-     * Will be used as a temporary surface in each onDraw call for more control over content are
-     * drawing.
-     */
+
     private Bitmap mTempBitmap;
-    /**
-     * Will be used as a temporary Canvas for mTempBitmap for drawing content on it.
-     */
     private Canvas mTempCanvas;
-
     private boolean backgroundInit = false;
-
     private Paint backgroundPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-
     private Bitmap mBackgroundBitmap;
-
     private Canvas mBackgroundCanvas;
-
     private Bitmap mAnimateBitmap;
-
     private Canvas mAnimateCanvas;
-
     private int mStateCounter = 0;
-
-    private int mStateDivider = 1;
-
     private List<Path> originPaths = new ArrayList<>();
-
     private Paint tempPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private boolean isBackward = false;
+    private boolean isForward = false;
 
-
-    /**
-     * Default constructor.
-     *
-     * @param context The Context of the application.
-     */
     public PathView(Context context) {
         this(context, null);
     }
 
-    /**
-     * Default constructor.
-     *
-     * @param context The Context of the application.
-     * @param attrs   attributes provided from the resources.
-     */
     public PathView(Context context, AttributeSet attrs) {
         this(context, attrs, 0);
     }
 
-    /**
-     * Default constructor.
-     *
-     * @param context  The Context of the application.
-     * @param attrs    attributes provided from the resources.
-     * @param defStyle Default style.
-     */
     public PathView(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
         paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeCap(Paint.Cap.ROUND);
         getFromAttributes(context, attrs);
         tempPaint.setStyle(Paint.Style.STROKE);
         tempPaint.setColor(Color.RED);
         tempPaint.setStrokeWidth(8);
+        tempPaint.setStrokeCap(Paint.Cap.ROUND);
     }
 
-    /**
-     * Get all the fields from the attributes .
-     *
-     * @param context The Context of the application.
-     * @param attrs   attributes provided from the resources.
-     */
     private void getFromAttributes(Context context, AttributeSet attrs) {
         final TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.PathView);
         try {
@@ -175,6 +87,7 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
                 naturalColors = a.getBoolean(R.styleable.PathView_naturalColors, false);
                 fill = a.getBoolean(R.styleable.PathView_fill,false);
                 fillColor = a.getColor(R.styleable.PathView_fillColor,Color.argb(0,0,0,0));
+                divider = a.getInteger(R.styleable.PathView_divider, 1);
             }
         } finally {
             if (a != null) {
@@ -185,11 +98,6 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
         }
     }
 
-    /**
-     * Set paths to be drawn and animated.
-     *
-     * @param paths - Paths that can be drawn.
-     */
     public void setPaths(final List<Path> paths) {
         for (Path path : paths) {
             this.paths.add(new SvgUtils.SvgPath(path, paint));
@@ -199,11 +107,6 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
         }
     }
 
-    /**
-     * Set path to be drawn and animated.
-     *
-     * @param path - Paths that can be drawn.
-     */
     public void setPath(final Path path) {
         paths.add(new SvgUtils.SvgPath(path, paint));
         synchronized (mSvgLock) {
@@ -211,12 +114,6 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
         }
     }
 
-    /**
-     * Animate this property. It is the percentage of the path that is drawn.
-     * It must be [0,1].
-     *
-     * @param percentage float the percentage of the path.
-     */
     public void setPercentage(float percentage) {
         if (percentage < 0.0f || percentage > 1.0f) {
             throw new IllegalArgumentException("setPercentage not between 0.0f and 1.0f");
@@ -228,9 +125,6 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
         invalidate();
     }
 
-    /**
-     * This refreshes the paths before draw and resize.
-     */
     private void updatePathsPhaseLocked() {
         final int count = paths.size();
         for (int i = 0; i < count; i++) {
@@ -264,14 +158,21 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
 
     public void setStateDivider(int divider) {
         if (divider > 0) {
-            mStateDivider = divider;
+            this.divider = divider;
         }
+    }
+
+    public void setBackward(boolean backward) {
+        isBackward = backward;
+    }
+
+    public void setForward(boolean forward) {
+        isForward = forward;
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        Log.d(LOG_TAG, "onDraw: " + progress);
         if (backgroundInit && mBackgroundBitmap == null && mBackgroundCanvas == null) {
             Log.d(LOG_TAG, "draw background");
             mBackgroundBitmap = Bitmap.createBitmap(canvas.getWidth(), canvas.getHeight(), Bitmap.Config.ARGB_8888);
@@ -309,11 +210,29 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
             mTempBitmap = Bitmap.createBitmap(canvas.getWidth(), canvas.getHeight(), Bitmap.Config.ARGB_8888);
             mTempCanvas = new Canvas(mTempBitmap);
         }
-        if (mStateCounter > 1 && progress > 0.00f && progress < 0.01f) {
-            int subState = (mStateCounter - 1) * mStateDivider;
-            for (int j = 0; j < subState; j++) {
-                Path path = originPaths.get(j);
-                mTempCanvas.drawPath(path, tempPaint);
+
+        if (isBackward) {
+            if (mStateCounter > 0) {
+                mTempCanvas.drawColor(0, PorterDuff.Mode.CLEAR);
+                Log.d(LOG_TAG, "draw temp backward");
+                int subState = (mStateCounter - 1) * divider;
+                for (int j = 0; j < subState; j++) {
+                    Path path = originPaths.get(j);
+                    mTempCanvas.drawPath(path, tempPaint);
+                }
+                isBackward = false;
+            }
+        }
+
+        if (isForward) {
+            if (mStateCounter > 0) {
+                Log.d(LOG_TAG, "draw forward");
+                int subState = (mStateCounter - 1) * divider;
+                for (int j = 0; j < subState; j++) {
+                    Path path = originPaths.get(j);
+                    mTempCanvas.drawPath(path, tempPaint);
+                }
+                isForward = false;
             }
         }
 
@@ -324,8 +243,10 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
             fill(mAnimateCanvas);
             int count = paths.size();
             if (paths.size() > 0 && mStateCounter > 0) {
-                int start = (mStateCounter - 1) * mStateDivider;
-                int end = mStateCounter * mStateDivider;
+                int start = (mStateCounter - 1) * divider;
+                int end = mStateCounter * divider;
+                if (mStateCounter == 5)
+                    end = end - 1;
                 if (end > count) {
                     end = count;
                 }
@@ -337,15 +258,6 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
                 }
 
             }
-            /*
-            for (int i = 0; i < count; i++) {
-                SvgUtils.SvgPath svgPath = paths.get(i);
-                Path path = svgPath.path;
-                Paint paint1 = naturalColors ? svgPath.paint : paint;
-                mAnimateCanvas.drawPath(path, paint1);
-            }
-            */
-
 
             fillAfter(mAnimateCanvas);
             mAnimateCanvas.restore();
@@ -357,33 +269,19 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
             canvas.drawBitmap(mAnimateBitmap, 0, 0, null);
         }
     }
-    /**
-     * If there is svg , the user called setFillAfter(true) and the progress is finished.
-     *
-     * @param canvas Draw to this canvas.
-     */
+
     private void fillAfter(final Canvas canvas) {
         if (svgResourceId != 0 && fillAfter && progress == 1f) {
             svgUtils.drawSvgAfter(canvas, width, height);
         }
     }
 
-    /**
-     * If there is svg , the user called setFill(true).
-     *
-     * @param canvas Draw to this canvas.
-     */
     private void fill(final Canvas canvas) {
         if (svgResourceId != 0 && fill) {
             svgUtils.drawSvgAfter(canvas, width, height);
         }
     }
 
-    /**
-     * If fillColor had value before then we replace untransparent pixels of bitmap by solid color
-     *
-     * @param bitmap Draw to this canvas.
-     */
     private void applySolidColor(final Bitmap bitmap) {
         if(fill && fillColor!=Color.argb(0,0,0,0) )
             if (bitmap != null) {
@@ -475,447 +373,43 @@ public class PathView extends View implements SvgUtils.AnimationStepListener {
         setMeasuredDimension(measuredWidth, measuredHeight);
     }
 
-    /**
-     * If the real svg need to be drawn after the path animation.
-     *
-     * @param fillAfter - boolean if the view needs to be filled after path animation.
-     */
     public void setFillAfter(final boolean fillAfter) {
         this.fillAfter = fillAfter;
     }
-    /**
-     * If the real svg need to be drawn without the path animation.
-     *
-     * @param fill - boolean if the view needs to be filled after path animation.
-     */
+
     public void setFill(final boolean fill) {
         this.fill = fill;
     }
-    /**
-     * The color for drawing svg in that color if the color be not transparent
-     *
-     * @param color - the color for filling in that
-     */
+
     public void setFillColor(final int color){
         this.fillColor=color;
     }
-    /**
-     * If you want to use the colors from the svg.
-     */
     public void useNaturalColors() {
         naturalColors = true;
     }
 
-    /**
-     * Animator for the paths of the view.
-     *
-     * @return The AnimatorBuilder to build the animation.
-     */
-    public AnimatorBuilder getPathAnimator() {
-        if (animatorBuilder == null) {
-            animatorBuilder = new AnimatorBuilder(this);
-        }
-        return animatorBuilder;
-    }
-
-    /**
-     * AnimatorSet for the paths of the view to be animated one after the other.
-     *
-     * @return The AnimatorBuilder to build the animation.
-     */
-    public AnimatorSetBuilder getSequentialPathAnimator() {
-        if (animatorSetBuilder == null) {
-            animatorSetBuilder = new AnimatorSetBuilder(this);
-        }
-        return animatorSetBuilder;
-    }
-
-    /**
-     * Get the path color.
-     *
-     * @return The color of the paint.
-     */
     public int getPathColor() {
         return paint.getColor();
     }
 
-    /**
-     * Set the path color.
-     *
-     * @param color -The color to set to the paint.
-     */
     public void setPathColor(final int color) {
         paint.setColor(color);
     }
 
-    /**
-     * Get the path width.
-     *
-     * @return The width of the paint.
-     */
     public float getPathWidth() {
         return paint.getStrokeWidth();
     }
 
-    /**
-     * Set the path width.
-     *
-     * @param width - The width of the path.
-     */
     public void setPathWidth(final float width) {
         paint.setStrokeWidth(width);
     }
 
-    /**
-     * Get the svg resource id.
-     *
-     * @return The svg raw resource id.
-     */
     public int getSvgResource() {
         return svgResourceId;
     }
 
-    /**
-     * Set the svg resource id.
-     *
-     * @param svgResource - The resource id of the raw svg.
-     */
     public void setSvgResource(int svgResource) {
         svgResourceId = svgResource;
     }
-
-    /**
-     * Object for building the animation of the path of this view.
-     */
-    public static class AnimatorBuilder {
-        /**
-         * Duration of the animation.
-         */
-        private int duration = 350;
-        /**
-         * Interpolator for the time of the animation.
-         */
-        private Interpolator interpolator;
-        /**
-         * The delay before the animation.
-         */
-        private int delay = 0;
-        /**
-         * ObjectAnimator that constructs the animation.
-         */
-        private final ObjectAnimator anim;
-        /**
-         * Listener called before the animation.
-         */
-        private ListenerStart listenerStart;
-        /**
-         * Listener after the animation.
-         */
-        private ListenerEnd animationEnd;
-        /**
-         * Animation listener.
-         */
-        private PathViewAnimatorListener pathViewAnimatorListener;
-
-        /**
-         * Default constructor.
-         *
-         * @param pathView The view that must be animated.
-         */
-        public AnimatorBuilder(final PathView pathView) {
-            anim = ObjectAnimator.ofFloat(pathView, "percentage", 0.0f, 1.0f);
-        }
-
-        /**
-         * Set the duration of the animation.
-         *
-         * @param duration - The duration of the animation.
-         * @return AnimatorBuilder.
-         */
-        public AnimatorBuilder duration(final int duration) {
-            this.duration = duration;
-            return this;
-        }
-
-        /**
-         * Set the Interpolator.
-         *
-         * @param interpolator - Interpolator.
-         * @return AnimatorBuilder.
-         */
-        public AnimatorBuilder interpolator(final Interpolator interpolator) {
-            this.interpolator = interpolator;
-            return this;
-        }
-
-        /**
-         * The delay before the animation.
-         *
-         * @param delay - int the delay
-         * @return AnimatorBuilder.
-         */
-        public AnimatorBuilder delay(final int delay) {
-            this.delay = delay;
-            return this;
-        }
-
-        /**
-         * Set a listener before the start of the animation.
-         *
-         * @param listenerStart an interface called before the animation
-         * @return AnimatorBuilder.
-         */
-        public AnimatorBuilder listenerStart(final ListenerStart listenerStart) {
-            this.listenerStart = listenerStart;
-            if (pathViewAnimatorListener == null) {
-                pathViewAnimatorListener = new PathViewAnimatorListener();
-                anim.addListener(pathViewAnimatorListener);
-            }
-            return this;
-        }
-
-        /**
-         * Set a listener after of the animation.
-         *
-         * @param animationEnd an interface called after the animation
-         * @return AnimatorBuilder.
-         */
-        public AnimatorBuilder listenerEnd(final ListenerEnd animationEnd) {
-            this.animationEnd = animationEnd;
-            if (pathViewAnimatorListener == null) {
-                pathViewAnimatorListener = new PathViewAnimatorListener();
-                anim.addListener(pathViewAnimatorListener);
-            }
-            return this;
-        }
-
-        /**
-         * Starts the animation.
-         */
-        public void start() {
-            anim.setDuration(duration);
-            anim.setInterpolator(interpolator);
-            anim.setStartDelay(delay);
-            anim.start();
-        }
-
-        /**
-         * Animation listener to be able to provide callbacks for the caller.
-         */
-        private class PathViewAnimatorListener implements Animator.AnimatorListener {
-
-            @Override
-            public void onAnimationStart(Animator animation) {
-                if (listenerStart != null) listenerStart.onAnimationStart();
-            }
-
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                if (animationEnd != null) animationEnd.onAnimationEnd();
-            }
-
-            @Override
-            public void onAnimationCancel(Animator animation) {
-
-            }
-
-            @Override
-            public void onAnimationRepeat(Animator animation) {
-
-            }
-        }
-
-        /**
-         * Called when the animation start.
-         */
-        public interface ListenerStart {
-            /**
-             * Called when the path animation start.
-             */
-            void onAnimationStart();
-        }
-
-        /**
-         * Called when the animation end.
-         */
-        public interface ListenerEnd {
-            /**
-             * Called when the path animation end.
-             */
-            void onAnimationEnd();
-        }
-    }
-
-    @Override
-    public void onAnimationStep() {
-        invalidate();
-    }
-
-    /**
-     * Object for building the sequential animation of the paths of this view.
-     */
-    public static class AnimatorSetBuilder {
-        /**
-         * Duration of the animation.
-         */
-        private int duration = 1000;
-        /**
-         * Interpolator for the time of the animation.
-         */
-        private Interpolator interpolator;
-        /**
-         * The delay before the animation.
-         */
-        private int delay = 0;
-        /**
-         * List of ObjectAnimator that constructs the animations of each path.
-         */
-        private final List<Animator> animators = new ArrayList<>();
-        /**
-         * Listener called before the animation.
-         */
-        private AnimatorBuilder.ListenerStart listenerStart;
-        /**
-         * Listener after the animation.
-         */
-        private AnimatorBuilder.ListenerEnd animationEnd;
-        /**
-         * Animation listener.
-         */
-        private AnimatorSetBuilder.PathViewAnimatorListener pathViewAnimatorListener;
-        /**
-         * The animator that can animate paths sequentially
-         */
-        private AnimatorSet animatorSet = new AnimatorSet();
-        /**
-         * The list of paths to be animated.
-         */
-        private List<SvgUtils.SvgPath> paths;
-
-        /**
-         * Default constructor.
-         *
-         * @param pathView The view that must be animated.
-         */
-        public AnimatorSetBuilder(final PathView pathView) {
-            paths = pathView.paths;
-            for (SvgUtils.SvgPath path : paths) {
-                path.setAnimationStepListener(pathView);
-                ObjectAnimator animation = ObjectAnimator.ofFloat(path, "length", 0.0f, path.getLength());
-                animators.add(animation);
-            }
-            animatorSet.playSequentially(animators);
-        }
-
-        /**
-         * Sets the duration of the animation. Since the AnimatorSet sets the duration for each
-         * Animator, we have to divide it by the number of paths.
-         *
-         * @param duration - The duration of the animation.
-         * @return AnimatorSetBuilder.
-         */
-        public AnimatorSetBuilder duration(final int duration) {
-            this.duration = duration / paths.size();
-            return this;
-        }
-
-        /**
-         * Set the Interpolator.
-         *
-         * @param interpolator - Interpolator.
-         * @return AnimatorSetBuilder.
-         */
-        public AnimatorSetBuilder interpolator(final Interpolator interpolator) {
-            this.interpolator = interpolator;
-            return this;
-        }
-
-        /**
-         * The delay before the animation.
-         *
-         * @param delay - int the delay
-         * @return AnimatorSetBuilder.
-         */
-        public AnimatorSetBuilder delay(final int delay) {
-            this.delay = delay;
-            return this;
-        }
-
-        /**
-         * Set a listener before the start of the animation.
-         *
-         * @param listenerStart an interface called before the animation
-         * @return AnimatorSetBuilder.
-         */
-        public AnimatorSetBuilder listenerStart(final AnimatorBuilder.ListenerStart listenerStart) {
-            this.listenerStart = listenerStart;
-            if (pathViewAnimatorListener == null) {
-                pathViewAnimatorListener = new PathViewAnimatorListener();
-                animatorSet.addListener(pathViewAnimatorListener);
-            }
-            return this;
-        }
-
-        /**
-         * Set a listener after of the animation.
-         *
-         * @param animationEnd an interface called after the animation
-         * @return AnimatorSetBuilder.
-         */
-        public AnimatorSetBuilder listenerEnd(final AnimatorBuilder.ListenerEnd animationEnd) {
-            this.animationEnd = animationEnd;
-            if (pathViewAnimatorListener == null) {
-                pathViewAnimatorListener = new PathViewAnimatorListener();
-                animatorSet.addListener(pathViewAnimatorListener);
-            }
-            return this;
-        }
-
-        /**
-         * Starts the animation.
-         */
-        public void start() {
-            resetAllPaths();
-            animatorSet.cancel();
-            animatorSet.setDuration(duration);
-            animatorSet.setInterpolator(interpolator);
-            animatorSet.setStartDelay(delay);
-            animatorSet.start();
-        }
-
-        /**
-         * Sets the length of all the paths to 0.
-         */
-        private void resetAllPaths() {
-            for (SvgUtils.SvgPath path : paths) {
-                path.setLength(0);
-            }
-        }
-
-        /**
-         * Animation listener to be able to provide callbacks for the caller.
-         */
-        private class PathViewAnimatorListener implements Animator.AnimatorListener {
-
-            @Override
-            public void onAnimationStart(Animator animation) {
-                if (listenerStart != null) listenerStart.onAnimationStart();
-            }
-
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                if (animationEnd != null) animationEnd.onAnimationEnd();
-            }
-
-            @Override
-            public void onAnimationCancel(Animator animation) {
-
-            }
-
-            @Override
-            public void onAnimationRepeat(Animator animation) {
-
-            }
-        }
-    }
+    
 }

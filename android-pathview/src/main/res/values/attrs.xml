@@ -7,5 +7,6 @@
     <attr name="fill" format="boolean"/>
     <attr name="fillColor" format="color|reference"/>
     <attr name="naturalColors" format="boolean"/>
+    <attr name="divider" format="integer"/>
   </declare-styleable>
 </resources>
